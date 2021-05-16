@@ -1,0 +1,14 @@
+---
+title: "R filtering of MMH herbivore diet dataset"
+author: "Anneke ter Schure"
+output:
+  pdf_document: default
+  word_document: default
+---
+
+This Rmarkdown file uses the results from OBITools processing as input and further filters the metabarcoding data.
+The code provided here is a mash-up from different sources, but primarily the ForBio course: DNA Metabarcoding: Data processing and interpretation.
+Special thanks and credit goes to the teachers: 
+Eric Coissac
+Frédéric Boyer
+Youri Lammers
