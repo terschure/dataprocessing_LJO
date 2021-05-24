@@ -1,5 +1,5 @@
 ---
-title: "R filtering of MMH herbivore diet dataset"
+title: "R filtering of Lake Ljøgottjern dataset"
 author: "Anneke ter Schure"
 output:
   pdf_document: default
@@ -7,8 +7,161 @@ output:
 ---
 
 This Rmarkdown file uses the results from OBITools processing as input and further filters the metabarcoding data.
-The code provided here is a mash-up from different sources, but primarily the ForBio course: DNA Metabarcoding: Data processing and interpretation.
+The code provided here is a mash-up from different sources, including the ForBio course: DNA Metabarcoding: Data processing and interpretation.
 Special thanks and credit goes to the teachers: 
 Eric Coissac
 Frédéric Boyer
 Youri Lammers
+
+This script includes the following steps:
+
+- Reformatting of the data into samples, motus and reads data frames
+- Checking the data
+- Removal of sequences that were identified only as ‘internal’ in the *obiclean* step (can be skipped if already removed by -H parameter in OBITools)
+- 
+
+```{r}
+# prepare the R environment
+library(tidyverse)
+```
+
+Setting the filters
+```{r}
+# Filter thresholds to be adjusted according to experiment
+bestid_thr = 1 # for best identity match with reference database
+thrCount_motu <- 10 # minimal number of reads to keep a MOTU
+thrCount_pcr <- 100 # minimal number of reads to keep a PCR replicate 
+min_replicates = 2 # minimal number of replicates needed to keep a sample
+```
+
+```{r}
+# load the data
+raw = read.delim("../data/p1_assigned_trnl_embl_arct_r005.tab")
+```
+In 'raw' we have the OTUs as rows and all of the information (quality, taxonomy, readcounts etc. in columns)
+Let's prepare a transformed version of the OTU table and seperate into specific tables:
+ - samples
+ - motus
+ - reads
+
+```{r}
+# motus should be a dataframe with the metadata for the motu ids
+# so we need a subset of the 'raw' dataframe without the readcounts
+motus = select(raw, -(starts_with('sample')))
+
+# and the opposite subset for the reads table
+reads = select(raw, starts_with('sample'))
+
+# change NAs (reads found for one database but not the other) into zeros 
+# NOTE: this is not necessary for the mammal data
+reads[is.na(reads)] = 0
+
+# Samples should just be a dataframe with complete samplenames as rownames and as a column "Samples"
+# so let's extract the sample names from the reads table
+names = as.character(colnames(reads))
+
+samplenames_split = strsplit(names,"[.]")
+
+# save the last part as the full sample name
+samplenames = sapply(samplenames_split,
+                   function(x) x[length(x)])
+
+samples = data.frame(sample = samplenames)
+rownames(samples) = samplenames
+# make sure the names match for the samples and reads tables
+colnames(reads) = samplenames 
+```
+```{r}
+# check the dimensions of the resulting dataframes
+dim(motus)
+dim(samples)
+dim(reads)
+```
+
+Extracting the sample names and updating the samples data frame
+
+```{r}
+# get sample names
+sample_names = as.character(samples$sample)
+
+# Split the names on the underscores
+sample_names_split = strsplit(sample_names,"_")
+#head(sample_names_split)
+
+# save the last part as replicate
+replicate = sapply(sample_names_split,
+                   function(x) x[length(x)])
+
+# save the first part as the sample id
+sample_id = sapply(sample_names_split,
+                   function(x) x[1])
+
+sample_type = sapply(sample_names_split,
+                   function(x) x[2])
+# label everyting as sample, except the controls
+sample_type[grep(pattern = "^s",sample_type)]="sample"
+sample_type[grep(pattern = "^pnc",sample_type)]="pcrneg"
+sample_type[grep(pattern = "^enc",sample_type)]="extneg"
+sample_type[is.na(sample_type)]="leakage" # in case we found some unused tags"
+
+# builds a data frame with the sample descriptions
+sample_desc = data.frame(name      = sample_names,
+                         sample_id = sample_id,
+                         replicate = replicate,
+                         type      = factor(sample_type),
+                         nonReplicating = FALSE # needed later on for filtering
+                         )
+rownames(sample_desc) = sample_desc$name
+
+# Substitute the old sample description by the new one
+samples = sample_desc
+sample_desc = NULL # cleanup the workspace
+```
+
+Update the motus dataframe by adding some information about the reference databases
+Note: this is only relevant for the plant sequence data
+
+```{r}
+sequence_type = rep("Unknown",nrow(motus))
+
+# we have two database and we want to prioritise the arctborbryo; so lets check both against the bestid_thr and let arctborbryo overrule the embl hits
+sequence_type[motus$`best_identity.trnl_r142` >= bestid_thr] = "embl" 
+sequence_type[motus$`best_identity.arctborbryo.gh` >= bestid_thr] = "arctborbryo" 
+
+motus$sequence_type=factor(sequence_type)
+
+# also save the corresponding best_identity and related values for:
+# "family_name", "genus_name", "species_name", "scientific_name"
+
+# save the highest best identity by comparison of both
+bestid = pmax(motus$`best_identity.arctborbryo.gh`,motus$best_identity.trnl_r142,na.rm = TRUE)
+family = rep(NA,nrow(motus))
+genus = rep(NA,nrow(motus))
+species = rep(NA,nrow(motus))
+scientific = rep(NA,nrow(motus))
+
+# make sure that they are character vectors
+motus = transform(motus, family_name = as.character(family_name),
+                  a_family_name = as.character(a_family_name),
+                  genus_name = as.character(genus_name),
+                  a_genus_name = as.character(a_genus_name),
+                  species_name = as.character(species_name),
+                  a_species_name = as.character(a_species_name),
+                  scientific_name = as.character(scientific_name),
+                  a_scientific_name = as.character(a_scientific_name)
+                  )
+
+family = ifelse(motus$sequence_type == "embl", motus$family_name, motus$a_family_name)
+genus = ifelse(motus$sequence_type == "embl", motus$genus_name, motus$a_genus_name)
+species = ifelse(motus$sequence_type == "embl", motus$species_name, motus$a_species_name)
+scientific = ifelse(motus$sequence_type == "embl", motus$scientific_name, motus$a_scientific_name)
+
+# add the info to the motus table
+motus$best_id=bestid
+motus$family_name=family
+motus$genus_name=genus
+motus$species_name=species
+motus$scientific_name=scientific
+```
+
+
