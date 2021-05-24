@@ -1,0 +1,103 @@
+---
+title: "R wrangling and merging of tabular file"
+author: "Anneke ter Schure"
+output:
+  pdf_document: default
+  word_document: default
+---
+
+This Rmarkdown file uses the results from OBITools processing of the plant sequencing data as input and merges the results from the different reference databases.
+
+```{r}
+# preparing the R environment
+library(tidyverse)
+```
+
+```{r}
+# loading the data
+arct = read.delim("../data/p1_assigned_trnl_uniq_arct_taxo_clean005_ann.tab")
+rownames(arct) = arct$id
+
+embl = read.delim("../data/p12_assigned_trnl_taxo_clean005_ann.tab")
+rownames(embl) = embl$id
+```
+
+```{r}
+# check if counts are the same
+temp_arct = select(arct, starts_with('sample'))
+temp_embl = select(embl, starts_with('sample'))
+
+counts_arct = temp_arct[,NULL]
+counts_arct$totalreads = rowSums(temp_arct)
+sum(counts_arct$totalreads)
+
+counts_embl = temp_embl[,NULL]
+counts_embl$totalreads = rowSums(temp_embl)
+sum(counts_embl$totalreads)
+```
+
+```{r}
+# save the motuIDs in a column
+arct$motuid = rownames(arct)
+embl$motuid = rownames(embl)
+
+# remove annotations we don't want to keep
+idx = c("definition", "ali_length", "avg_quality", "direction", "forward_match", "forward_primer", "forward_score", "forward_tag", "rank", "reverse_match", "reverse_primer", "reverse_score", "reverse_tag", "seq_a_deletion", "seq_a_insertion", "seq_a_mismatch","seq_a_single","seq_ab_match", "seq_b_deletion", "seq_b_insertion", "seq_b_mismatch", "seq_b_single", "seq_length_ori", "status", "tail_quality")
+arctnew = select(arct, -all_of(idx))
+emblnew = select(embl, -all_of(idx))
+```
+
+```{r}
+# check which columns are in one but not the other table
+notinembl = setdiff(colnames(arct),colnames(embl))
+notinarct = setdiff(colnames(embl),colnames(arct))
+
+# get a subset for the embl dataframe for those columns
+cols_notinarct = select(emblnew, all_of(notinarct), "family_name", "genus_name", "species_name", "scientific_name") 
+cols_notinarct$motuid = rownames(cols_notinarct)
+
+# make empty lists for those missing columns
+empty_char = rep("NA", length(rownames(emblnew)))
+empty_int = rep(0, length(rownames(emblnew)))
+emblnew$best_identity.arctborbryo.gh = empty_int
+emblnew$best_match.arctborbryo.gh = empty_char
+emblnew$match_count.arctborbryo.gh = empty_int
+emblnew$species_list.arctborbryo.gh = empty_char
+```
+
+```{r}
+# get the data for the motus that are not in one of the data tables
+# rows_notinembl = anti_join(arctnew, emblnew, by="motuid") 
+rows_notinarct = anti_join(emblnew, arctnew, by="motuid")
+rows_notinarct_clean = select(rows_notinarct, -(notinarct)) # remove the columns that are not in arct
+```
+
+```{r}
+# add these rows to the arctnew dataset to create a full dataset with all motus
+allmotus = rbind(arctnew, rows_notinarct_clean) 
+
+# rename the columns that shouldn't be merged
+allmotus$a_family_name = allmotus$family_name
+allmotus$a_genus_name = allmotus$genus_name
+allmotus$a_species_name = allmotus$species_name
+allmotus$a_scientific_name = allmotus$scientific_name
+
+# remove those no longer needed
+allmotus$family_name = NULL
+allmotus$genus_name = NULL
+allmotus$species_name = NULL
+allmotus$scientific_name = NULL
+```
+```{r}
+# append the embl data that was missing in the arct dataset
+both = left_join(allmotus, cols_notinarct, by="motuid") 
+dim(both)
+
+rownames(both) = both$motuid
+both$motuid = NULL
+```
+
+```{r}
+# save the new merged dataset 
+write.table(both, "../data/p1_assigned_trnl_embl_arct_r005.tab", row.names = TRUE, col.names = TRUE, quote = FALSE, sep = "\t")
+```
